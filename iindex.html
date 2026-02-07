@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Búsqueda del Tesoro QR</title>
+
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+
+<style>
+body {
+  font-family: Arial, sans-serif;
+  background: #f4f4f4;
+  text-align: center;
+  padding: 30px;
+}
+input, button {
+  padding: 10px;
+  margin: 5px;
+}
+#game {
+  display: none;
+}
+#clue {
+  background: #fff;
+  padding: 15px;
+  margin-top: 10px;
+  border-radius: 8px;
+}
+</style>
+</head>
+
+<body>
+
+<h1>🏴‍☠️ Búsqueda del Tesoro</h1>
+
+<!-- LOGIN -->
+<div id="login">
+  <input id="name" placeholder="Tu nombre">
+  <br>
+  <button onclick="startGame()">Iniciar juego</button>
+</div>
+
+<!-- JUEGO -->
+<div id="game">
+  <h2 id="playerName"></h2>
+  <p id="time"></p>
+
+  <h3>🏆 Trofeos</h3>
+  <ul id="trophies"></ul>
+
+  <h3>📷 Escanear QR</h3>
+  <input id="qrInput" placeholder="Código QR">
+  <br>
+  <button onclick="scanQR()">Registrar QR</button>
+  <p id="qrMessage"></p>
+
+  <h3>🧩 Pista</h3>
+  <div id="clue"></div>
+
+  <h3>🥇 Ranking</h3>
+  <ol id="ranking"></ol>
+</div>
+
+<script>
+// 🔥 FIREBASE
+const firebaseConfig = {
+  apiKey: "TU_API_KEY",
+  authDomain: "qr-treasure-game.firebaseapp.com",
+  projectId: "qr-treasure-game"
+};
+
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+
+// 🔐 ESTADO
+let player = "";
+let finished = false;
+
+// 🧩 PISTAS (AQUÍ LUEGO CAMBIAS TEXTOS O IMÁGENES)
+const clues = {
+  "META_1": {
+    type: "text",
+    content: "Busca donde el viento mueve las hojas."
+  },
+  "META_2": {
+    type: "text",
+    content: "Sigue el sonido del agua."
+  },
+  "BONUS_5": {
+    type: "text",
+    content: "Has encontrado un atajo secreto."
+  },
+  "META_FINAL": {
+    type: "text",
+    content: "🏁 ¡Llegaste al final!"
+  }
+};
+
+// ▶️ INICIAR JUEGO (NIVEL 1)
+function startGame() {
+  player = document.getElementById("name").value.trim();
+  if (!player) return;
+
+  const now = Date.now();
+
+  db.collection("players").doc(player).set({
+    name: player,
+    startTime: now,
+    finishTime: null,
+    trophies: [],
+    bonus: 0
+  });
+
+  document.getElementById("login").style.display = "none";
+  document.getElementById("game").style.display = "block";
+  document.getElementById("playerName").innerText = "Jugador: " + player;
+
+  setInterval(updateTime, 1000);
+  setInterval(loadRanking, 3000);
+}
+
+// ⏱️ TIEMPO EN VIVO
+function updateTime() {
+  if (finished) return;
+
+  db.collection("players").doc(player).get().then(doc => {
+    const d = doc.data();
+    const elapsed =
+      Math.floor((Date.now() - d.startTime) / 1000) - (d.bonus || 0);
+
+    document.getElementById("time").innerText =
+      "⏱️ Tiempo: " + Math.max(elapsed, 0) + "s";
+  });
+}
+
+// 📷 ESCANEAR QR (NIVEL 2 + 3 + 4)
+function scanQR() {
+  if (finished) {
+    document.getElementById("qrMessage").innerText =
+      "⛔ El juego ya terminó";
+    return;
+  }
+
+  const qr = document.getElementById("qrInput").value.trim();
+  if (!qr) return;
+
+  const ref = db.collection("players").doc(player);
+
+  ref.get().then(doc => {
+    const data = doc.data();
+    let trophies = data.trophies || [];
+    let bonus = data.bonus || 0;
+
+    if (trophies.includes(qr)) {
+      document.getElementById("qrMessage").innerText =
+        "⚠️ QR ya usado";
+      return;
+    }
+
+    // 🧩 MOSTRAR PISTA
+    if (clues[qr]) {
+      const clueBox = document.getElementById("clue");
+      clueBox.innerText = clues[qr].content;
+    }
+
+    // 🏁 FINAL
+    if (qr === "META_FINAL") {
+      ref.update({ finishTime: Date.now() });
+      finished = true;
+      document.getElementById("qrMessage").innerText =
+        "🏁 Juego finalizado";
+      return;
+    }
+
+    // 🎁 BONUS
+    if (qr.startsWith("BONUS_")) {
+      bonus += parseInt(qr.split("_")[1]);
+    }
+
+    trophies.push(qr);
+
+    ref.update({
+      trophies: trophies,
+      bonus: bonus
+    });
+
+    renderTrophies(trophies);
+    document.getElementById("qrInput").value = "";
+  });
+}
+
+// 🏆 MOSTRAR TROFEOS
+function renderTrophies(list) {
+  const ul = document.getElementById("trophies");
+  ul.innerHTML = "";
+  list.forEach(t => {
+    const li = document.createElement("li");
+    li.innerText = "🏆 " + t;
+    ul.appendChild(li);
+  });
+}
+
+// 🥇 RANKING FINAL (NIVEL 3)
+function loadRanking() {
+  db.collection("players").get().then(snapshot => {
+    const players = [];
+
+    snapshot.forEach(doc => {
+      const d = doc.data();
+      if (!d.finishTime) return;
+
+      const total =
+        Math.floor((d.finishTime - d.startTime) / 1000) - (d.bonus || 0);
+
+      players.push({
+        name: d.name,
+        time: Math.max(total, 0)
+      });
+    });
+
+    players.sort((a, b) => a.time - b.time);
+
+    const ol = document.getElementById("ranking");
+    ol.innerHTML = "";
+
+    players.forEach(p => {
+      const li = document.createElement("li");
+      li.innerText = `${p.name} — ⏱️ ${p.time}s`;
+      ol.appendChild(li);
+    });
+  });
+}
+</script>
+
+</body>
+</html>
