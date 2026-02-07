@@ -1,115 +1,104 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-<meta charset="UTF-8">
-<title>Búsqueda del Tesoro QR</title>
+  <meta charset="UTF-8">
+  <title>Búsqueda del Tesoro QR</title>
 
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
 
-<style>
-body {
-  font-family: Arial, sans-serif;
-  background: #f4f4f4;
-  text-align: center;
-  padding: 30px;
-}
-input, button {
-  padding: 10px;
-  margin: 5px;
-}
-#game {
-  display: none;
-}
-#clue {
-  background: #fff;
-  padding: 15px;
-  margin-top: 10px;
-  border-radius: 8px;
-}
-</style>
+  <!-- Escáner QR -->
+  <script src="https://unpkg.com/html5-qrcode"></script>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+      background: #f4f4f4;
+      padding: 30px;
+    }
+    input, button {
+      padding: 10px;
+      font-size: 16px;
+      margin: 5px;
+    }
+    #game { display: none; }
+    #reader { margin: auto; }
+    img { max-width: 100%; }
+  </style>
 </head>
-
 <body>
 
 <h1>🏴‍☠️ Búsqueda del Tesoro</h1>
 
 <!-- LOGIN -->
 <div id="login">
-  <input id="name" placeholder="Tu nombre">
+  <p>Ingresa tu nombre</p>
+  <input type="text" id="name" placeholder="Tu nombre">
   <br>
-  <button onclick="startGame()">Iniciar juego</button>
+  <button onclick="startGame()">Iniciar</button>
 </div>
 
 <!-- JUEGO -->
 <div id="game">
   <h2 id="playerName"></h2>
-  <p id="time"></p>
+  <p id="time">⏱️ Tiempo: 0 s</p>
 
-  <h3>🏆 Trofeos</h3>
-  <ul id="trophies"></ul>
+  <h3>📥 Escanear QR (manual)</h3>
+  <input type="text" id="qrInput" placeholder="Código QR">
+  <button onclick="scanQR()">Enviar</button>
 
-  <h3>📷 Escanear QR</h3>
-  <input id="qrInput" placeholder="Código QR">
-  <br>
-  <button onclick="scanQR()">Registrar QR</button>
-  <p id="qrMessage"></p>
+  <h3>📷 Escanear con cámara</h3>
+  <div id="reader" style="width:300px;"></div>
+  <button onclick="startScanner()">Activar cámara</button>
+  <button onclick="stopScanner()">Detener cámara</button>
 
   <h3>🧩 Pista</h3>
   <div id="clue"></div>
 
-  <h3>🥇 Ranking</h3>
-  <ol id="ranking"></ol>
+  <h3>🏆 Trofeos</h3>
+  <ul id="trophies"></ul>
 </div>
 
 <script>
-// 🔥 FIREBASE
+/* 🔥 CONFIGURACIÓN FIREBASE */
 const firebaseConfig = {
   apiKey: "TU_API_KEY",
-  authDomain: "qr-treasure-game.firebaseapp.com",
-  projectId: "qr-treasure-game"
+  authDomain: "TU_DOMINIO",
+  projectId: "TU_PROJECT_ID",
 };
 
 firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
 
-// 🔐 ESTADO
+/* VARIABLES */
 let player = "";
+let startTime = 0;
 let finished = false;
+let qrScanner;
 
-// 🧩 PISTAS (AQUÍ LUEGO CAMBIAS TEXTOS O IMÁGENES)
+/* PISTAS (NIVEL 4) */
 const clues = {
-  "META_1": {
-    type: "text",
-    content: "Busca donde el viento mueve las hojas."
-  },
-  "META_2": {
-    type: "text",
-    content: "Sigue el sonido del agua."
-  },
-  "BONUS_5": {
-    type: "text",
-    content: "Has encontrado un atajo secreto."
-  },
-  "META_FINAL": {
-    type: "text",
-    content: "🏁 ¡Llegaste al final!"
-  }
+  "META_1": { type: "text", content: "Busca donde hay árboles." },
+  "META_2": { type: "text", content: "Ahora ve al lugar más alto." },
+  "BONUS_1": { type: "text", content: "🎁 Bonus: -10 segundos" },
+  "META_FINAL": { type: "text", content: "🏁 ¡Terminaste el juego!" }
 };
 
-// ▶️ INICIAR JUEGO (NIVEL 1)
+/* INICIO JUEGO (NIVEL 1) */
 function startGame() {
   player = document.getElementById("name").value.trim();
-  if (!player) return;
+  if (!player) return alert("Escribe tu nombre");
 
-  const now = Date.now();
+  startTime = Date.now();
 
   db.collection("players").doc(player).set({
     name: player,
-    startTime: now,
-    finishTime: null,
+    startTime,
     trophies: [],
-    bonus: 0
+    finished: false,
+    time: 0
   });
 
   document.getElementById("login").style.display = "none";
@@ -117,119 +106,81 @@ function startGame() {
   document.getElementById("playerName").innerText = "Jugador: " + player;
 
   setInterval(updateTime, 1000);
-  setInterval(loadRanking, 3000);
 }
 
-// ⏱️ TIEMPO EN VIVO
+/* TIEMPO */
 function updateTime() {
   if (finished) return;
-
-  db.collection("players").doc(player).get().then(doc => {
-    const d = doc.data();
-    const elapsed =
-      Math.floor((Date.now() - d.startTime) / 1000) - (d.bonus || 0);
-
-    document.getElementById("time").innerText =
-      "⏱️ Tiempo: " + Math.max(elapsed, 0) + "s";
-  });
+  const seconds = Math.floor((Date.now() - startTime) / 1000);
+  document.getElementById("time").innerText = "⏱️ Tiempo: " + seconds + " s";
 }
 
-// 📷 ESCANEAR QR (NIVEL 2 + 3 + 4)
+/* ESCANEO QR (NIVELES 2–3–4) */
 function scanQR() {
-  if (finished) {
-    document.getElementById("qrMessage").innerText =
-      "⛔ El juego ya terminó";
-    return;
-  }
+  if (finished) return;
 
   const qr = document.getElementById("qrInput").value.trim();
-  if (!qr) return;
+  if (!qr || !clues[qr]) return alert("QR inválido");
 
-  const ref = db.collection("players").doc(player);
+  db.collection("players").doc(player).get().then(doc => {
+    let data = doc.data();
+    if (data.trophies.includes(qr)) return;
 
-  ref.get().then(doc => {
-    const data = doc.data();
-    let trophies = data.trophies || [];
-    let bonus = data.bonus || 0;
+    data.trophies.push(qr);
 
-    if (trophies.includes(qr)) {
-      document.getElementById("qrMessage").innerText =
-        "⚠️ QR ya usado";
-      return;
+    if (qr.startsWith("BONUS")) {
+      startTime -= 10000; // -10s
     }
 
-    // 🧩 MOSTRAR PISTA
-    if (clues[qr]) {
-      const clueBox = document.getElementById("clue");
-      clueBox.innerText = clues[qr].content;
-    }
-
-    // 🏁 FINAL
     if (qr === "META_FINAL") {
-      ref.update({ finishTime: Date.now() });
       finished = true;
-      document.getElementById("qrMessage").innerText =
-        "🏁 Juego finalizado";
-      return;
+      data.finished = true;
+      data.time = Math.floor((Date.now() - startTime) / 1000);
     }
 
-    // 🎁 BONUS
-    if (qr.startsWith("BONUS_")) {
-      bonus += parseInt(qr.split("_")[1]);
-    }
-
-    trophies.push(qr);
-
-    ref.update({
-      trophies: trophies,
-      bonus: bonus
-    });
-
-    renderTrophies(trophies);
-    document.getElementById("qrInput").value = "";
+    db.collection("players").doc(player).update(data);
+    renderClue(qr);
+    renderTrophies(data.trophies);
   });
 }
 
-// 🏆 MOSTRAR TROFEOS
+/* MOSTRAR PISTA */
+function renderClue(qr) {
+  const box = document.getElementById("clue");
+  box.innerHTML = "";
+
+  if (clues[qr].type === "text") {
+    box.innerText = clues[qr].content;
+  }
+}
+
+/* MOSTRAR TROFEOS */
 function renderTrophies(list) {
   const ul = document.getElementById("trophies");
   ul.innerHTML = "";
   list.forEach(t => {
     const li = document.createElement("li");
-    li.innerText = "🏆 " + t;
+    li.innerText = t;
     ul.appendChild(li);
   });
 }
 
-// 🥇 RANKING FINAL (NIVEL 3)
-function loadRanking() {
-  db.collection("players").get().then(snapshot => {
-    const players = [];
+/* NIVEL 5 — ESCÁNER CÁMARA */
+function startScanner() {
+  qrScanner = new Html5Qrcode("reader");
+  qrScanner.start(
+    { facingMode: "environment" },
+    { fps: 10, qrbox: 250 },
+    qrCode => {
+      document.getElementById("qrInput").value = qrCode;
+      scanQR();
+    },
+    () => {}
+  );
+}
 
-    snapshot.forEach(doc => {
-      const d = doc.data();
-      if (!d.finishTime) return;
-
-      const total =
-        Math.floor((d.finishTime - d.startTime) / 1000) - (d.bonus || 0);
-
-      players.push({
-        name: d.name,
-        time: Math.max(total, 0)
-      });
-    });
-
-    players.sort((a, b) => a.time - b.time);
-
-    const ol = document.getElementById("ranking");
-    ol.innerHTML = "";
-
-    players.forEach(p => {
-      const li = document.createElement("li");
-      li.innerText = `${p.name} — ⏱️ ${p.time}s`;
-      ol.appendChild(li);
-    });
-  });
+function stopScanner() {
+  if (qrScanner) qrScanner.stop();
 }
 </script>
 
